@@ -10,6 +10,7 @@ const http = require('http');
 const args = process.argv.slice(2);
 const watchFlag = args.includes('--watch') || args.includes('-w');
 const helpFlag = args.includes('--help') || args.includes('-h');
+const jsonFlag = args.includes('--json');
 const intervalArg = args.find(a => a.startsWith('--interval='));
 const intervalHours = intervalArg ? parseFloat(intervalArg.split('=')[1]) : 2;
 
@@ -20,6 +21,10 @@ const cloneUrl = cloneIdx !== -1 ? args[cloneIdx + 1] : null;
 // AI flag: --ai <provider> (ollama, openai)
 const aiIdx = args.indexOf('--ai');
 const aiProvider = aiIdx !== -1 ? args[aiIdx + 1] : null;
+
+// Ollama host: --ollama-host <url> (for remote Ollama instances)
+const ollamaHostIdx = args.indexOf('--ollama-host');
+const ollamaHost = ollamaHostIdx !== -1 ? args[ollamaHostIdx + 1] : 'http://localhost:11434';
 
 // Get repo path (first non-flag arg that's not a value for --clone or --ai)
 const flagValues = new Set([cloneUrl, aiProvider].filter(Boolean));
@@ -37,6 +42,8 @@ if (helpFlag) {
     --interval=<hours>    Update interval in watch mode (default: 2)
     --clone <url>         Clone a repo first, then analyze it
     --ai <provider>       Use AI for enhanced analysis (ollama, openai)
+    --ollama-host <url>   Ollama host URL (default: http://localhost:11434)
+    --json                Output analysis as JSON to stdout (for programmatic use)
     -h, --help            Show this help message
 
   AI Providers:
@@ -56,12 +63,18 @@ if (helpFlag) {
 
 // ============ AI HELPER FUNCTIONS ============
 
+// Parse Ollama host URL
+const ollamaUrl = new URL(ollamaHost);
+const ollamaHostname = ollamaUrl.hostname;
+const ollamaPort = parseInt(ollamaUrl.port || '11434', 10);
+const ollamaProtocol = ollamaUrl.protocol === 'https:' ? https : http;
+
 async function callOllama(prompt, model = 'qwen2.5-coder:7b') {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({ model, prompt, stream: false });
-    const req = http.request({
-      hostname: 'localhost',
-      port: 11434,
+    const req = ollamaProtocol.request({
+      hostname: ollamaHostname,
+      port: ollamaPort,
       path: '/api/generate',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
@@ -170,7 +183,7 @@ Respond in this exact JSON format:
         data.aiSummary = aiData.summary;
         data.aiKeyThings = aiData.keyThings;
         data.aiGotchas = aiData.gotchas;
-        console.log('  ✅ AI analysis complete');
+        log('  ✅ AI analysis complete');
       }
     } catch (e) {
       console.error('  ⚠️  Could not parse AI response');
@@ -201,10 +214,15 @@ if (cloneUrl) {
   }
 }
 
+// Helper for progress logging (suppressed in JSON mode)
+function log(msg) {
+  if (!jsonFlag) console.log(msg);
+}
+
 // Main analysis function
 function runAnalysis() {
-console.log(`\n  🚀 on-bored - Developer Onboarding Generator\n`);
-console.log(`  Analyzing: ${path.resolve(repoPath)}\n`);
+log(`\n  🚀 on-bored - Developer Onboarding Generator\n`);
+log(`  Analyzing: ${path.resolve(repoPath)}\n`);
 
 // Ensure we're in a git repo
 try {
@@ -229,7 +247,7 @@ function countLines(output) {
   return output.split('\n').filter(l => l.trim()).length;
 }
 
-console.log('  📊 Collecting git statistics...');
+log('  📊 Collecting git statistics...');
 
 // ============ BASIC INFO ============
 const repoName = path.basename(path.resolve(repoPath));
@@ -368,7 +386,7 @@ const contributors = contributorsRaw.map(c => {
 });
 
 // ============ MONTHLY BREAKDOWN ============
-console.log('  📅 Analyzing monthly activity...');
+log('  📅 Analyzing monthly activity...');
 const months = [];
 for (let i = 5; i >= 0; i--) {
   const date = new Date();
@@ -392,7 +410,7 @@ for (let i = 5; i >= 0; i--) {
 }
 
 // ============ FILE CHURN ============
-console.log('  🔥 Finding high-churn files...');
+log('  🔥 Finding high-churn files...');
 const fileChurnRaw = git('log --name-only --pretty=format: --diff-filter=M');
 const fileChurnMap = {};
 fileChurnRaw.split('\n').forEach(file => {
@@ -406,7 +424,7 @@ const topFiles = Object.entries(fileChurnMap)
   .map(([file, count]) => ({ file: path.basename(file), fullPath: file, changes: count }));
 
 // ============ CATEGORY ANALYSIS ============
-console.log('  🏷️  Categorizing commits...');
+log('  🏷️  Categorizing commits...');
 const categories = [
   { name: 'Authentication', patterns: ['auth', 'login', 'signup', 'session', 'oauth', 'jwt', 'password'] },
   { name: 'UI / Frontend', patterns: ['ui', 'modal', 'style', 'css', 'component', 'layout', 'button', 'form'] },
@@ -425,7 +443,7 @@ const categoryStats = categories.map(cat => {
 }).sort((a, b) => b.count - a.count);
 
 // ============ TECH STACK DETECTION ============
-console.log('  🛠️  Detecting tech stack...');
+log('  🛠️  Detecting tech stack...');
 const techStack = [];
 const foundTech = new Set(); // Track what we've already added
 
@@ -516,7 +534,7 @@ try {
 } catch (e) {}
 
 // ============ README PARSING ============
-console.log('  📖 Extracting project description...');
+log('  📖 Extracting project description...');
 let projectDescription = '';
 let projectTitle = repoName;
 
@@ -570,7 +588,7 @@ for (const readmePath of readmePaths) {
 }
 
 // ============ CODEBASE STRUCTURE ANALYSIS ============
-console.log('  🗂️  Analyzing codebase structure...');
+log('  🗂️  Analyzing codebase structure...');
 
 // Detect primary language
 let primaryLanguage = 'unknown';
@@ -796,12 +814,12 @@ try {
 } catch (e) {}
 
 // ============ DEAD CODE DETECTION ============
-console.log('  💀 Detecting potentially dead code (tech debt)...');
+log('  💀 Detecting potentially dead code (tech debt)...');
 let deadCode = { unusedComponents: [], unusedFiles: [], unusedExports: [] };
 
 // Find Vue/React components that are never imported (optimized)
 try {
-  console.log('    - Scanning for unused components...');
+  log('    - Scanning for unused components...');
 
   // Get all component files
   const componentFiles = execSync(
@@ -845,7 +863,7 @@ try {
 
 // Find TypeScript/JS files with exports that might not be used (optimized - check whole files, not individual exports)
 try {
-  console.log('    - Scanning for unused exports...');
+  log('    - Scanning for unused exports...');
 
   // Only scan files in specific directories, limit scope
   const tsFiles = execSync(
@@ -897,7 +915,7 @@ try {
 
 // Find files that are never imported anywhere (orphaned modules) - optimized
 try {
-  console.log('    - Scanning for orphaned files...');
+  log('    - Scanning for orphaned files...');
 
   // Get source files (limited scope)
   const srcFiles = execSync(
@@ -933,7 +951,7 @@ try {
 } catch (e) {}
 
 // ============ SECURITY & COMPLIANCE SCANNING ============
-console.log('  🔒 Scanning for security vulnerabilities...');
+log('  🔒 Scanning for security vulnerabilities...');
 const security = { vulnerabilities: [], warnings: [] };
 
 // Check for hardcoded secrets
@@ -1004,7 +1022,7 @@ try {
 } catch (e) {}
 
 // ============ NCOSE COMPLIANCE SCANNING (Optimized) ============
-console.log('  📋 Checking NCOSE compliance indicators...');
+log('  📋 Checking NCOSE compliance indicators...');
 const compliance = {
   ageVerification: { found: false, files: [], notes: [] },
   contentModeration: { found: false, files: [], notes: [] },
@@ -1086,7 +1104,7 @@ Object.keys(compliance).forEach(key => {
 });
 
 // ============ OPEN ISSUES (if gh cli available) ============
-console.log('  🐛 Checking for open issues...');
+log('  🐛 Checking for open issues...');
 let openIssues = [];
 try {
   const issuesRaw = execSync('gh issue list --limit 10 --json number,title 2>/dev/null', { cwd: repoPath, encoding: 'utf8' });
@@ -1096,7 +1114,7 @@ try {
 }
 
 // ============ ARCHITECTURE FLOW DATA ============
-console.log('  🔀 Building architecture flow...');
+log('  🔀 Building architecture flow...');
 const flowData = {
   layers: []
 };
@@ -1150,7 +1168,7 @@ if (backendTech.length > 0) {
 }
 
 // ============ GENERATE INTELLIGENT PROJECT SUMMARY ============
-console.log('  🧠 Generating project summary...');
+log('  🧠 Generating project summary...');
 
 let generatedSummary = '';
 try {
@@ -1248,7 +1266,7 @@ try {
 }
 
 // ============ BUILD OUTPUT ============
-console.log('  📝 Generating documentation...\n');
+log('  📝 Generating documentation...\n');
 
 const data = {
   repoName,
@@ -1310,6 +1328,12 @@ async function runWithAI() {
   // Enhance with AI if enabled
   const enhancedData = await enhanceWithAI(data, sampleCode);
 
+  // If --json flag is set, output JSON to stdout and exit
+  if (jsonFlag) {
+    console.log(JSON.stringify(enhancedData, null, 2));
+    return;
+  }
+
   // Save JSON data
   fs.writeFileSync(path.join(outputDir, 'data.json'), JSON.stringify(enhancedData, null, 2));
 
@@ -1317,8 +1341,8 @@ async function runWithAI() {
   const generateHTML = require('../lib/generateHTML');
   generateHTML(enhancedData, outputDir);
 
-  console.log(`  ✅ Documentation generated in: ${outputDir}`);
-  console.log(`  🌐 Run 'npm start' to view at http://localhost:3333\n`);
+  log(`  ✅ Documentation generated in: ${outputDir}`);
+  log(`  🌐 Run 'npm start' to view at http://localhost:3333\n`);
 }
 
 // Run initial analysis
