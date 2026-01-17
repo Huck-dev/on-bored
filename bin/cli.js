@@ -149,47 +149,240 @@ async function callAI(prompt) {
 async function enhanceWithAI(data, sampleCode) {
   if (!aiProvider) return data;
 
-  console.log(`  🤖 Enhancing with AI (${aiProvider})...`);
+  log(`  🤖 Enhancing with AI (${aiProvider})...`);
 
-  const prompt = `You are analyzing a codebase for developer onboarding. Based on this information, provide:
-1. A clear 2-3 sentence project summary explaining what this project does
-2. The top 3 things a new developer should understand first
-3. Any potential gotchas or complex areas to be aware of
+  // Initialize AI data container
+  data.ai = {
+    summary: null,
+    keyThings: [],
+    gotchas: [],
+    architecture: null,
+    onboardingSteps: [],
+    deadCodeAnalysis: null,
+    codePatterns: [],
+    recommendations: [],
+    quickStart: null
+  };
 
-Project: ${data.repoName}
-Language: ${data.primaryLanguage || 'Mixed'}
-Tech Stack: ${data.techStack.map(t => t.name).join(', ')}
-Entry Points: ${data.entryPoints?.slice(0, 5).map(e => e.file).join(', ') || 'None detected'}
-Modules: ${data.modules?.slice(0, 10).map(m => m.name).join(', ') || 'None detected'}
-Top Changed Files: ${data.topFiles.slice(0, 5).map(f => f.file).join(', ')}
+  // Build comprehensive context
+  const projectContext = `
+PROJECT: ${data.repoName}
+LANGUAGE: ${data.primaryLanguage || 'Mixed'}
+TECH STACK: ${data.techStack.map(t => `${t.name} (${t.type})`).join(', ') || 'Not detected'}
+TOTAL COMMITS: ${data.totalCommits}
+CONTRIBUTORS: ${data.contributors?.slice(0, 5).map(c => `${c.name} (${c.commits} commits, focus: ${c.focus})`).join(', ') || 'Unknown'}
+TOP CHANGED FILES: ${data.topFiles?.slice(0, 8).map(f => f.file).join(', ') || 'None'}
+MODULES: ${data.modules?.slice(0, 15).map(m => m.name).join(', ') || 'None detected'}
+COMPONENTS: ${data.components?.slice(0, 15).map(c => c.name).join(', ') || 'None detected'}
+API ENDPOINTS: ${data.apiEndpoints?.slice(0, 10).map(e => e.name).join(', ') || 'None detected'}
+FUNCTIONS: ${data.functions?.slice(0, 15).map(f => f.name).join(', ') || 'None detected'}
+ENV VARS: ${data.envVars?.slice(0, 10).join(', ') || 'None detected'}
+README DESCRIPTION: ${data.projectDescription?.slice(0, 500) || 'No README found'}
+`;
 
-Sample code from main files:
-${sampleCode.slice(0, 3000)}
+  const deadCodeContext = data.deadCode ? `
+POTENTIALLY UNUSED COMPONENTS: ${data.deadCode.unusedComponents?.slice(0, 10).map(c => c.component).join(', ') || 'None'}
+POTENTIALLY ORPHANED FILES: ${data.deadCode.unusedFiles?.slice(0, 10).map(f => f.file).join(', ') || 'None'}
+POTENTIALLY UNUSED EXPORTS: ${data.deadCode.unusedExports?.slice(0, 10).map(e => e.export).join(', ') || 'None'}
+` : '';
 
-Respond in this exact JSON format:
+  // ============ PROMPT 1: Project Overview & Architecture ============
+  log('    - Analyzing project architecture...');
+  const archPrompt = `You are a senior software architect analyzing a codebase. Based on this project information, provide a comprehensive analysis.
+
+${projectContext}
+
+SAMPLE CODE:
+${sampleCode.slice(0, 4000)}
+
+Respond in this EXACT JSON format (no markdown, just raw JSON):
 {
-  "summary": "...",
-  "keyThings": ["...", "...", "..."],
-  "gotchas": ["...", "..."]
+  "summary": "A 2-3 sentence description of what this project does and its purpose",
+  "projectType": "web app|api|cli|library|mobile app|fullstack|monorepo|other",
+  "architecture": {
+    "pattern": "The architectural pattern used (e.g., MVC, microservices, serverless, modular monolith)",
+    "description": "2-3 sentences explaining how the codebase is organized",
+    "keyDirectories": ["list of most important directories and what they contain"],
+    "dataFlow": "Brief description of how data flows through the application"
+  },
+  "keyThings": [
+    "First critical thing a new developer must understand",
+    "Second critical thing",
+    "Third critical thing",
+    "Fourth critical thing",
+    "Fifth critical thing"
+  ],
+  "gotchas": [
+    "Potential pitfall or non-obvious behavior 1",
+    "Potential pitfall or non-obvious behavior 2",
+    "Potential pitfall or non-obvious behavior 3"
+  ],
+  "codePatterns": [
+    {"name": "Pattern name", "description": "How this pattern is used in the codebase", "example": "Brief example or file reference"},
+    {"name": "Pattern name 2", "description": "Description", "example": "Example"}
+  ]
 }`;
 
-  const response = await callAI(prompt);
-  if (response) {
-    try {
-      // Extract JSON from response (handle markdown code blocks)
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
+  try {
+    const archResponse = await callAI(archPrompt);
+    if (archResponse) {
+      const jsonMatch = archResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const aiData = JSON.parse(jsonMatch[0]);
-        data.aiSummary = aiData.summary;
-        data.aiKeyThings = aiData.keyThings;
-        data.aiGotchas = aiData.gotchas;
-        log('  ✅ AI analysis complete');
+        const archData = JSON.parse(jsonMatch[0]);
+        data.ai.summary = archData.summary;
+        data.ai.projectType = archData.projectType;
+        data.ai.architecture = archData.architecture;
+        data.ai.keyThings = archData.keyThings || [];
+        data.ai.gotchas = archData.gotchas || [];
+        data.ai.codePatterns = archData.codePatterns || [];
+      }
+    }
+  } catch (e) {
+    log('    ⚠️  Architecture analysis failed');
+  }
+
+  // ============ PROMPT 2: Onboarding Guide ============
+  log('    - Generating onboarding guide...');
+  const onboardPrompt = `You are creating a developer onboarding guide for this project.
+
+${projectContext}
+
+Tech stack detected: ${data.techStack.map(t => t.name).join(', ')}
+
+Create a step-by-step onboarding guide. Respond in this EXACT JSON format:
+{
+  "quickStart": {
+    "setup": ["Step 1 to set up local environment", "Step 2", "Step 3"],
+    "firstTask": "A good first task for a new developer to understand the codebase",
+    "keyFiles": ["Most important files to read first with brief explanation of each"]
+  },
+  "onboardingSteps": [
+    {"day": "Day 1", "title": "Environment Setup", "tasks": ["Task 1", "Task 2", "Task 3"]},
+    {"day": "Day 2-3", "title": "Codebase Exploration", "tasks": ["Task 1", "Task 2"]},
+    {"day": "Week 1", "title": "First Contributions", "tasks": ["Task 1", "Task 2"]}
+  ],
+  "learningPath": [
+    {"topic": "Topic to learn", "why": "Why it matters for this project", "resources": "Suggested way to learn"},
+    {"topic": "Topic 2", "why": "Reason", "resources": "Resources"}
+  ],
+  "commonTasks": [
+    {"task": "Common development task", "howTo": "Brief explanation of how to do it"},
+    {"task": "Another common task", "howTo": "How to do it"}
+  ]
+}`;
+
+  try {
+    const onboardResponse = await callAI(onboardPrompt);
+    if (onboardResponse) {
+      const jsonMatch = onboardResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const onboardData = JSON.parse(jsonMatch[0]);
+        data.ai.quickStart = onboardData.quickStart;
+        data.ai.onboardingSteps = onboardData.onboardingSteps || [];
+        data.ai.learningPath = onboardData.learningPath || [];
+        data.ai.commonTasks = onboardData.commonTasks || [];
+      }
+    }
+  } catch (e) {
+    log('    ⚠️  Onboarding guide generation failed');
+  }
+
+  // ============ PROMPT 3: Dead Code & Tech Debt Analysis ============
+  if (data.deadCode && (data.deadCode.unusedComponents?.length > 0 || data.deadCode.unusedFiles?.length > 0)) {
+    log('    - Analyzing tech debt...');
+    const debtPrompt = `You are analyzing potential dead code and tech debt in a codebase.
+
+${projectContext}
+
+${deadCodeContext}
+
+Analyze these potentially unused items. Some may be false positives (used dynamically, via re-exports, etc.).
+
+Respond in this EXACT JSON format:
+{
+  "deadCodeAnalysis": {
+    "overallAssessment": "Brief assessment of the tech debt situation",
+    "priority": "high|medium|low",
+    "estimatedCleanupEffort": "Brief estimate like '2-4 hours' or '1-2 days'",
+    "recommendations": [
+      "Specific recommendation 1",
+      "Specific recommendation 2"
+    ]
+  },
+  "itemAnalysis": [
+    {"item": "ItemName", "verdict": "likely dead|probably used|investigate", "reason": "Why you think this"},
+    {"item": "ItemName2", "verdict": "verdict", "reason": "reason"}
+  ],
+  "refactoringOpportunities": [
+    {"area": "Area of code", "suggestion": "What could be improved", "benefit": "Why it would help"}
+  ]
+}`;
+
+    try {
+      const debtResponse = await callAI(debtPrompt);
+      if (debtResponse) {
+        const jsonMatch = debtResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const debtData = JSON.parse(jsonMatch[0]);
+          data.ai.deadCodeAnalysis = debtData.deadCodeAnalysis;
+          data.ai.itemAnalysis = debtData.itemAnalysis || [];
+          data.ai.refactoringOpportunities = debtData.refactoringOpportunities || [];
+        }
       }
     } catch (e) {
-      console.error('  ⚠️  Could not parse AI response');
+      log('    ⚠️  Tech debt analysis failed');
     }
   }
 
+  // ============ PROMPT 4: Recommendations & Improvements ============
+  log('    - Generating recommendations...');
+  const recsPrompt = `You are a senior developer reviewing this codebase and providing actionable recommendations.
+
+${projectContext}
+
+Based on the tech stack and project structure, provide recommendations.
+
+Respond in this EXACT JSON format:
+{
+  "recommendations": [
+    {"category": "Performance|Security|Code Quality|Testing|Documentation|DevOps", "title": "Recommendation title", "description": "What to do and why", "priority": "high|medium|low"},
+    {"category": "Category", "title": "Title", "description": "Description", "priority": "priority"}
+  ],
+  "missingPieces": [
+    "Thing that seems to be missing from the project",
+    "Another missing piece"
+  ],
+  "strengths": [
+    "What this codebase does well",
+    "Another strength"
+  ],
+  "technicalDebtAreas": [
+    {"area": "Area with tech debt", "description": "What the issue is", "suggestedFix": "How to address it"}
+  ]
+}`;
+
+  try {
+    const recsResponse = await callAI(recsPrompt);
+    if (recsResponse) {
+      const jsonMatch = recsResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const recsData = JSON.parse(jsonMatch[0]);
+        data.ai.recommendations = recsData.recommendations || [];
+        data.ai.missingPieces = recsData.missingPieces || [];
+        data.ai.strengths = recsData.strengths || [];
+        data.ai.technicalDebtAreas = recsData.technicalDebtAreas || [];
+      }
+    }
+  } catch (e) {
+    log('    ⚠️  Recommendations generation failed');
+  }
+
+  // Backwards compatibility - copy to old fields
+  data.aiSummary = data.ai.summary;
+  data.aiKeyThings = data.ai.keyThings;
+  data.aiGotchas = data.ai.gotchas;
+
+  log('  ✅ AI analysis complete');
   return data;
 }
 
@@ -815,9 +1008,13 @@ try {
 
 // ============ DEAD CODE DETECTION ============
 log('  💀 Detecting potentially dead code (tech debt)...');
-let deadCode = { unusedComponents: [], unusedFiles: [], unusedExports: [] };
+let deadCode = { unusedComponents: [], unusedFiles: [], unusedExports: [], notes: [] };
 
-// Find Vue/React components that are never imported (optimized)
+// Add detection methodology notes
+deadCode.notes.push('Detection checks: direct imports, re-exports, barrel files, dynamic imports, template usage');
+deadCode.notes.push('Skipped patterns: index files, pages, layouts, and foundational components (renderer, provider, base, etc.)');
+
+// Find Vue/React components that are never imported (improved detection)
 try {
   log('    - Scanning for unused components...');
 
@@ -827,11 +1024,20 @@ try {
     { encoding: 'utf8' }
   ).split('\n').filter(f => f.trim());
 
-  // Build index of all component usages (one grep call)
+  // Build comprehensive index of all component usages (imports, re-exports, dynamic imports, JSX/template usage)
   let allUsages = '';
   try {
     allUsages = execSync(
-      `grep -r -h -E "(import.*from|<[A-Z])" ${repoPath} 2>/dev/null | grep -v node_modules | head -1000`,
+      `grep -r -h -E "(import.*from|<[A-Z]|export.*from|export \\{|defineAsyncComponent|dynamic.*import|lazy\\(|component:|:is=|resolveComponent)" ${repoPath} 2>/dev/null | grep -v node_modules | head -2000`,
+      { encoding: 'utf8' }
+    );
+  } catch (e) {}
+
+  // Also check index.ts/index.js barrel exports
+  let barrelExports = '';
+  try {
+    barrelExports = execSync(
+      `find ${repoPath} -type f \\( -name "index.ts" -o -name "index.js" \\) -path "*/components/*" 2>/dev/null | xargs cat 2>/dev/null | head -500`,
       { encoding: 'utf8' }
     );
   } catch (e) {}
@@ -847,21 +1053,79 @@ try {
     if (relative.includes('/pages/')) return;
     if (relative.includes('/layouts/')) return;
 
-    // Quick check: is component name anywhere in usages?
-    const kebabName = componentName.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '');
+    // Skip common foundational/utility components (often used indirectly)
+    const foundationalPatterns = ['base', 'wrapper', 'provider', 'renderer', 'container', 'layout', 'slot', 'portal', 'teleport', 'suspense', 'error', 'loading', 'skeleton', 'icon', 'svg'];
+    const lowerName = componentName.toLowerCase();
+    if (foundationalPatterns.some(p => lowerName.includes(p))) return;
 
-    if (!allUsages.includes(componentName) && !allUsages.includes(kebabName)) {
+    // Check multiple usage patterns
+    const kebabName = componentName.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '');
+    const pascalName = componentName;
+
+    // Track what we checked
+    const checksPerformed = [];
+    let isUsed = false;
+    let usageType = null;
+
+    // Check direct import
+    if (allUsages.includes(componentName)) {
+      isUsed = true;
+      usageType = 'direct import';
+    }
+    checksPerformed.push('direct import');
+
+    // Check kebab-case usage in templates
+    if (!isUsed && allUsages.includes(kebabName)) {
+      isUsed = true;
+      usageType = 'template (kebab-case)';
+    }
+    checksPerformed.push('template usage');
+
+    // Check string references
+    if (!isUsed && (allUsages.includes(`'${pascalName}'`) || allUsages.includes(`"${pascalName}"`))) {
+      isUsed = true;
+      usageType = 'string reference';
+    }
+    checksPerformed.push('string references');
+
+    // Check barrel exports
+    if (!isUsed && (barrelExports.includes(componentName) || barrelExports.includes(filename))) {
+      isUsed = true;
+      usageType = 'barrel export';
+    }
+    checksPerformed.push('barrel exports');
+
+    if (!isUsed) {
+      // Determine confidence level based on component characteristics
+      let confidence = 'high';
+      let reason = 'No imports, template usage, or re-exports found';
+
+      // Lower confidence if component is in a deeply nested folder (might be internal)
+      if (relative.split('/').length > 5) {
+        confidence = 'medium';
+        reason += '. Deeply nested - may be internal to parent component';
+      }
+
+      // Lower confidence if component name suggests it's a variant/sub-component
+      if (componentName.includes('Item') || componentName.includes('Cell') || componentName.includes('Row')) {
+        confidence = 'medium';
+        reason += '. Name suggests sub-component - may be used by parent';
+      }
+
       unusedComponents.push({
         path: relative,
         file: filename,
-        component: componentName
+        component: componentName,
+        confidence,
+        reason,
+        checked: checksPerformed.join(', ')
       });
     }
   });
   deadCode.unusedComponents = unusedComponents.slice(0, 25);
 } catch (e) {}
 
-// Find TypeScript/JS files with exports that might not be used (optimized - check whole files, not individual exports)
+// Find TypeScript/JS files with exports that might not be used (improved detection with reasoning)
 try {
   log('    - Scanning for unused exports...');
 
@@ -882,13 +1146,23 @@ try {
     );
   } catch (e) {}
 
+  // Also check for dynamic usage patterns
+  let dynamicUsages = '';
+  try {
+    dynamicUsages = execSync(
+      `grep -r -h -E "(\\[.*\\]|\\.\\.\\.|Object\\.keys|Object\\.values)" ${repoPath} 2>/dev/null | grep -v node_modules | head -300`,
+      { encoding: 'utf8' }
+    );
+  } catch (e) {}
+
   tsFiles.slice(0, 30).forEach(f => {
     const relative = path.relative(repoPath, f);
     const filename = path.basename(f);
     const basename = path.basename(f, path.extname(f));
 
-    // Skip common entry points
-    if (['index', 'main', 'app', 'server', 'cli', 'config', 'env', 'types', 'constants'].includes(basename.toLowerCase())) return;
+    // Skip common entry points and utility files
+    const skipFiles = ['index', 'main', 'app', 'server', 'cli', 'config', 'env', 'types', 'constants', 'utils', 'helpers'];
+    if (skipFiles.includes(basename.toLowerCase())) return;
 
     try {
       const content = fs.readFileSync(f, 'utf8');
@@ -900,10 +1174,36 @@ try {
           const exportName = match[1];
           if (exportName.startsWith('use')) return; // composables
           if (exportName.length < 4) return; // too short
+          if (exportName.startsWith('_')) return; // private by convention
 
-          // Quick check against our import index
-          if (!allImports.includes(exportName) && !allImports.includes(basename)) {
-            unusedExports.push({ path: relative, file: filename, export: exportName });
+          // Check various usage patterns
+          const inImports = allImports.includes(exportName) || allImports.includes(basename);
+          const inDynamic = dynamicUsages.includes(exportName);
+
+          if (!inImports && !inDynamic) {
+            // Determine confidence
+            let confidence = 'high';
+            let reason = 'Not found in any import statements';
+
+            // Lower confidence for certain patterns
+            if (exportName.endsWith('Type') || exportName.endsWith('Interface') || exportName.endsWith('Props')) {
+              confidence = 'low';
+              reason = 'Type definition - may be used via type imports not captured';
+            } else if (exportName.includes('Handler') || exportName.includes('Callback')) {
+              confidence = 'medium';
+              reason = 'Handler/callback - may be passed dynamically';
+            } else if (relative.includes('/utils/') || relative.includes('/helpers/')) {
+              confidence = 'medium';
+              reason = 'Utility function - may be used via spread/destructure';
+            }
+
+            unusedExports.push({
+              path: relative,
+              file: filename,
+              export: exportName,
+              confidence,
+              reason
+            });
           }
         }
       });
@@ -913,7 +1213,7 @@ try {
   deadCode.unusedExports = unusedExports.slice(0, 20);
 } catch (e) {}
 
-// Find files that are never imported anywhere (orphaned modules) - optimized
+// Find files that are never imported anywhere (orphaned modules) - improved detection with reasoning
 try {
   log('    - Scanning for orphaned files...');
 
@@ -923,11 +1223,20 @@ try {
     { encoding: 'utf8' }
   ).split('\n').filter(f => f.trim());
 
-  // Build index of all imports (reuse if already built, or make one call)
+  // Build comprehensive index of all imports and re-exports
   let allRefs = '';
   try {
     allRefs = execSync(
-      `grep -r -h -E "(from ['\"]|import |require\\()" ${repoPath} 2>/dev/null | grep -v node_modules | head -800`,
+      `grep -r -h -E "(from ['\"]|import |require\\(|export.*from)" ${repoPath} 2>/dev/null | grep -v node_modules | head -1500`,
+      { encoding: 'utf8' }
+    );
+  } catch (e) {}
+
+  // Check for script/CLI usage patterns
+  let scriptUsages = '';
+  try {
+    scriptUsages = execSync(
+      `grep -r -h -E "(node |ts-node |tsx |scripts.*:|bin.*:)" ${repoPath}/package.json 2>/dev/null || echo ""`,
       { encoding: 'utf8' }
     );
   } catch (e) {}
@@ -938,13 +1247,50 @@ try {
     const basename = path.basename(f, path.extname(f));
     const filename = path.basename(f);
 
-    // Skip entry points
-    if (['index', 'main', 'app', 'server', 'env', 'config', 'types', 'utils'].includes(basename.toLowerCase())) return;
+    // Skip entry points and common utility names
+    const skipNames = ['index', 'main', 'app', 'server', 'env', 'config', 'types', 'utils', 'helpers', 'constants', 'hooks', 'composables', 'store', 'router', 'i18n', 'plugin'];
+    if (skipNames.includes(basename.toLowerCase())) return;
     if (basename.startsWith('_')) return;
 
-    // Quick check against our refs index
-    if (!allRefs.includes(basename)) {
-      orphaned.push({ path: relative, file: filename });
+    // Skip foundational/utility files (often used indirectly via re-exports or dynamic imports)
+    const foundationalPatterns = ['base', 'core', 'common', 'shared', 'provider', 'renderer', 'wrapper', 'factory', 'service', 'client', 'sdk', 'api', 'context', 'handler', 'manager', 'controller', 'middleware', 'interceptor', 'guard', 'decorator', 'mixin', 'plugin', 'directive', 'filter', 'pipe', 'validator'];
+    const lowerBasename = basename.toLowerCase();
+    if (foundationalPatterns.some(p => lowerBasename.includes(p))) return;
+
+    // Check various reference patterns
+    const parentFolder = path.basename(path.dirname(f));
+    const inImports = allRefs.includes(basename) ||
+      allRefs.includes(`/${parentFolder}/${basename}`) ||
+      allRefs.includes(`'${basename}'`) ||
+      allRefs.includes(`"${basename}"`);
+    const inScripts = scriptUsages.includes(basename) || scriptUsages.includes(filename);
+
+    if (!inImports && !inScripts) {
+      // Determine confidence and reason
+      let confidence = 'high';
+      let reason = 'Not imported by any other module';
+
+      // Lower confidence for certain patterns
+      if (relative.includes('/scripts/') || relative.includes('/bin/')) {
+        confidence = 'low';
+        reason = 'In scripts folder - likely run directly, not imported';
+      } else if (basename.includes('script') || basename.includes('migrate') || basename.includes('seed')) {
+        confidence = 'low';
+        reason = 'Name suggests standalone script - run directly, not imported';
+      } else if (relative.includes('/workers/') || relative.includes('/jobs/')) {
+        confidence = 'low';
+        reason = 'Worker/job file - typically invoked by runtime, not imported';
+      } else if (relative.split('/').length > 6) {
+        confidence = 'medium';
+        reason = 'Deeply nested - may be internal module of parent';
+      }
+
+      orphaned.push({
+        path: relative,
+        file: filename,
+        confidence,
+        reason
+      });
     }
   });
   deadCode.unusedFiles = orphaned.slice(0, 20);
