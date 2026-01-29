@@ -1367,6 +1367,203 @@ try {
   });
 } catch (e) {}
 
+// ============ OWASP TOP 10 COMPLIANCE SCANNING ============
+log('  🛡️  Scanning for OWASP Top 10 compliance...');
+const owasp = {
+  A01_BrokenAccessControl: { score: 0, maxScore: 10, findings: [], files: [] },
+  A02_CryptographicFailures: { score: 0, maxScore: 10, findings: [], files: [] },
+  A03_Injection: { score: 0, maxScore: 10, findings: [], files: [] },
+  A04_InsecureDesign: { score: 0, maxScore: 10, findings: [], files: [] },
+  A05_SecurityMisconfiguration: { score: 0, maxScore: 10, findings: [], files: [] },
+  A06_VulnerableComponents: { score: 0, maxScore: 10, findings: [], files: [] },
+  A07_AuthenticationFailures: { score: 0, maxScore: 10, findings: [], files: [] },
+  A08_DataIntegrityFailures: { score: 0, maxScore: 10, findings: [], files: [] },
+  A09_LoggingFailures: { score: 0, maxScore: 10, findings: [], files: [] },
+  A10_SSRF: { score: 0, maxScore: 10, findings: [], files: [] }
+};
+
+try {
+  // A01: Check for access control patterns
+  const authPatterns = execSync(
+    `grep -r -l -E "(requireAuth|isAuthenticated|checkPermission|authorize|isAdmin|hasRole|canAccess)" ${repoPath} 2>/dev/null | grep -v node_modules | head -10`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  if (authPatterns) {
+    owasp.A01_BrokenAccessControl.score = 8;
+    owasp.A01_BrokenAccessControl.findings.push('Access control patterns detected');
+    owasp.A01_BrokenAccessControl.files = authPatterns.split('\n').slice(0, 5).map(f => path.relative(repoPath, f));
+  }
+} catch (e) { owasp.A01_BrokenAccessControl.score = 5; }
+
+try {
+  // A02: Check for crypto patterns
+  const cryptoGood = execSync(
+    `grep -r -l -E "(bcrypt|argon2|scrypt|crypto\\.createHash|AES|pbkdf2)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  const cryptoBad = execSync(
+    `grep -r -l -E "(md5|sha1[^0-9]|localStorage.*token|sessionStorage.*token)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A02_CryptographicFailures.score = cryptoGood ? 7 : 5;
+  if (cryptoBad) {
+    owasp.A02_CryptographicFailures.score -= 3;
+    owasp.A02_CryptographicFailures.findings.push('Weak crypto or token storage in localStorage detected');
+  }
+  if (cryptoGood) {
+    owasp.A02_CryptographicFailures.findings.push('Strong cryptographic patterns detected');
+    owasp.A02_CryptographicFailures.files = cryptoGood.split('\n').slice(0, 3).map(f => path.relative(repoPath, f));
+  }
+} catch (e) { owasp.A02_CryptographicFailures.score = 5; }
+
+try {
+  // A03: Injection prevention
+  const parameterized = execSync(
+    `grep -r -l -E "(prepared|parameterized|Query\\.equal|sanitize|escape|zod|yup|joi)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  const rawQueries = execSync(
+    `grep -r -l -E "(\\$\\{.*\\}.*SELECT|\\$\\{.*\\}.*INSERT|eval\\(|exec\\()" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A03_Injection.score = parameterized ? 9 : 6;
+  if (rawQueries) {
+    owasp.A03_Injection.score -= 4;
+    owasp.A03_Injection.findings.push('Raw query patterns or eval detected - injection risk');
+  }
+  if (parameterized) {
+    owasp.A03_Injection.findings.push('Input validation/parameterized queries detected');
+    owasp.A03_Injection.files = parameterized.split('\n').slice(0, 3).map(f => path.relative(repoPath, f));
+  }
+} catch (e) { owasp.A03_Injection.score = 5; }
+
+try {
+  // A04: Insecure Design - rate limiting, CSRF
+  const rateLimiting = execSync(
+    `grep -r -l -E "(rateLimit|throttle|express-rate-limit|slowDown)" ${repoPath} 2>/dev/null | grep -v node_modules | head -3`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  const csrf = execSync(
+    `grep -r -l -E "(csrf|xsrf|csurf|SameSite)" ${repoPath} 2>/dev/null | grep -v node_modules | head -3`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A04_InsecureDesign.score = 5;
+  if (rateLimiting) {
+    owasp.A04_InsecureDesign.score += 2;
+    owasp.A04_InsecureDesign.findings.push('Rate limiting detected');
+    owasp.A04_InsecureDesign.files.push(...rateLimiting.split('\n').slice(0, 2).map(f => path.relative(repoPath, f)));
+  } else {
+    owasp.A04_InsecureDesign.findings.push('No rate limiting detected');
+  }
+  if (csrf) {
+    owasp.A04_InsecureDesign.score += 2;
+    owasp.A04_InsecureDesign.findings.push('CSRF protection detected');
+  } else {
+    owasp.A04_InsecureDesign.findings.push('No CSRF protection detected');
+  }
+} catch (e) { owasp.A04_InsecureDesign.score = 5; }
+
+try {
+  // A05: Security Misconfiguration - CORS, headers
+  const corsConfig = execSync(
+    `grep -r -l -E "(cors|Access-Control-Allow|helmet|CSP|Content-Security-Policy)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A05_SecurityMisconfiguration.score = corsConfig ? 7 : 4;
+  if (corsConfig) {
+    owasp.A05_SecurityMisconfiguration.findings.push('CORS/security headers configuration found');
+    owasp.A05_SecurityMisconfiguration.files = corsConfig.split('\n').slice(0, 3).map(f => path.relative(repoPath, f));
+  } else {
+    owasp.A05_SecurityMisconfiguration.findings.push('No security headers configuration found');
+  }
+} catch (e) { owasp.A05_SecurityMisconfiguration.score = 5; }
+
+try {
+  // A06: Vulnerable Components - check for lock files
+  const lockFiles = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'Cargo.lock', 'go.sum', 'requirements.txt'];
+  const hasLockFile = lockFiles.some(f => fs.existsSync(path.join(repoPath, f)));
+  owasp.A06_VulnerableComponents.score = hasLockFile ? 7 : 5;
+  owasp.A06_VulnerableComponents.findings.push(hasLockFile ? 'Dependency lock file found' : 'No lock file - dependency versions may drift');
+} catch (e) { owasp.A06_VulnerableComponents.score = 5; }
+
+try {
+  // A07: Authentication - 2FA, session management
+  const twoFA = execSync(
+    `grep -r -l -E "(totp|2fa|mfa|authenticator|otp)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  const sessions = execSync(
+    `grep -r -l -E "(session|jwt|cookie.*httpOnly|passport)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A07_AuthenticationFailures.score = 5;
+  if (twoFA) {
+    owasp.A07_AuthenticationFailures.score += 3;
+    owasp.A07_AuthenticationFailures.findings.push('2FA/MFA implementation detected');
+    owasp.A07_AuthenticationFailures.files.push(...twoFA.split('\n').slice(0, 2).map(f => path.relative(repoPath, f)));
+  }
+  if (sessions) {
+    owasp.A07_AuthenticationFailures.score += 2;
+    owasp.A07_AuthenticationFailures.findings.push('Session management detected');
+  }
+} catch (e) { owasp.A07_AuthenticationFailures.score = 5; }
+
+try {
+  // A08: Data Integrity - webhook signatures, HMAC
+  const integrity = execSync(
+    `grep -r -l -E "(webhook.*signature|hmac|constructEvent|verifySignature|idempotency)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A08_DataIntegrityFailures.score = integrity ? 8 : 5;
+  if (integrity) {
+    owasp.A08_DataIntegrityFailures.findings.push('Webhook verification/data integrity patterns found');
+    owasp.A08_DataIntegrityFailures.files = integrity.split('\n').slice(0, 3).map(f => path.relative(repoPath, f));
+  } else {
+    owasp.A08_DataIntegrityFailures.findings.push('No webhook signature verification detected');
+  }
+} catch (e) { owasp.A08_DataIntegrityFailures.score = 5; }
+
+try {
+  // A09: Logging - audit trails
+  const logging = execSync(
+    `grep -r -l -E "(audit|logger|winston|pino|bunyan|console\\.log)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  const auditTrail = execSync(
+    `grep -r -l -E "(audit.*log|activity.*log|event.*log)" ${repoPath} 2>/dev/null | grep -v node_modules | head -3`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A09_LoggingFailures.score = logging ? 6 : 4;
+  if (auditTrail) {
+    owasp.A09_LoggingFailures.score += 2;
+    owasp.A09_LoggingFailures.findings.push('Audit logging detected');
+  }
+  if (logging) {
+    owasp.A09_LoggingFailures.findings.push('Logging implementation found');
+  }
+} catch (e) { owasp.A09_LoggingFailures.score = 5; }
+
+try {
+  // A10: SSRF - URL validation
+  const ssrfRisk = execSync(
+    `grep -r -l -E "(fetch\\(.*\\+|axios.*\\+|request\\(.*\\+|url.*=.*req\\.|href.*=.*req\\.)" ${repoPath} 2>/dev/null | grep -v node_modules | head -5`,
+    { encoding: 'utf8', timeout: 10000 }
+  ).trim();
+  owasp.A10_SSRF.score = ssrfRisk ? 5 : 9;
+  if (ssrfRisk) {
+    owasp.A10_SSRF.findings.push('User-controlled URLs in fetch/request detected - SSRF risk');
+    owasp.A10_SSRF.files = ssrfRisk.split('\n').slice(0, 3).map(f => path.relative(repoPath, f));
+  } else {
+    owasp.A10_SSRF.findings.push('No obvious SSRF patterns detected');
+  }
+} catch (e) { owasp.A10_SSRF.score = 7; }
+
+// Calculate overall OWASP score
+const owaspCategories = Object.values(owasp);
+const totalOwaspScore = owaspCategories.reduce((sum, cat) => sum + cat.score, 0);
+const maxOwaspScore = owaspCategories.reduce((sum, cat) => sum + cat.maxScore, 0);
+owasp.overallScore = Math.round((totalOwaspScore / maxOwaspScore) * 10 * 10) / 10;
+
 // ============ NCOSE COMPLIANCE SCANNING (Optimized) ============
 log('  📋 Checking NCOSE compliance indicators...');
 const compliance = {
@@ -1382,7 +1579,7 @@ const compliance = {
 // Single grep to find all compliance-related content (much faster)
 try {
   const allComplianceMatches = execSync(
-    `grep -r -i -l -E "(ageverif|verifyage|sumsub|onfido|birthdate|kyc|moderat|nsfw|reportuser|reportcontent|blockuser|2257|stripe.*connect|payout|chargeback|2fa|otp|mfa)" ${repoPath} 2>/dev/null | grep -v node_modules | grep -v dist | grep -v ".git" | head -100`,
+    `grep -r -i -l -E "(ageverif|verifyage|sumsub|onfido|birthdate|kyc|moderat|nsfw|reportuser|reportcontent|blockuser|2257|stripe.*connect|payout|chargeback|2fa|otp|mfa|support.?ticket|flag.?message|flag.?content|safety.?audit|audit.?log|flagged|unflag)" ${repoPath} 2>/dev/null | grep -v node_modules | grep -v dist | grep -v ".git" | head -100`,
     { encoding: 'utf8', timeout: 15000 }
   ).trim();
 
@@ -1412,14 +1609,16 @@ try {
         if (!compliance.identityVerification.files.includes(relFile)) compliance.identityVerification.files.push(relFile);
       }
 
-      // Reporting
-      if (lowerFile.includes('report') || lowerFile.includes('flag') || lowerFile.includes('abuse')) {
+      // Reporting (flag, report, support tickets, complaints)
+      if (lowerFile.includes('report') || lowerFile.includes('flag') || lowerFile.includes('abuse') ||
+          lowerFile.includes('ticket') || lowerFile.includes('complaint') || lowerFile.includes('support')) {
         compliance.reportingMechanism.found = true;
         if (!compliance.reportingMechanism.files.includes(relFile)) compliance.reportingMechanism.files.push(relFile);
       }
 
-      // Record keeping
-      if (lowerFile.includes('2257') || lowerFile.includes('record')) {
+      // Record keeping (2257, audit trails, verification records, logs)
+      if (lowerFile.includes('2257') || lowerFile.includes('record') || lowerFile.includes('audit') ||
+          lowerFile.includes('verification') || lowerFile.includes('history') || lowerFile.includes('log')) {
         compliance.recordKeeping.found = true;
         if (!compliance.recordKeeping.files.includes(relFile)) compliance.recordKeeping.files.push(relFile);
       }
@@ -1646,6 +1845,7 @@ const data = {
   flowData,
   security,
   compliance,
+  owasp,
   generatedAt: new Date().toISOString()
 };
 
